@@ -91,55 +91,95 @@
     `;
   }
 
+  async function getRecordIdList(table) {
+    // 尝试各种方式获取记录列表
+    try {
+      // 方法1: getRecordIdList (新版)
+      if (table.getRecordIdList) {
+        const ids = await table.getRecordIdList();
+        if (ids && ids.length > 0) return ids;
+      }
+    } catch(e) { log('getRecordIdList失败: ' + e.message); }
+    
+    try {
+      // 方法2: getRecordList
+      if (table.getRecordList) {
+        const list = await table.getRecordList();
+        if (list && list.length > 0) return list.map(r => r.id || r.recordId || r);
+      }
+    } catch(e) { log('getRecordList失败: ' + e.message); }
+    
+    try {
+      // 方法3: 遍历迭代器
+      const ids = [];
+      for await (const r of table) {
+        ids.push(r.id || r.recordId || '');
+        if (ids.length > 200) break;
+      }
+      if (ids.length > 0) return ids;
+    } catch(e) { log('迭代器失败: ' + e.message); }
+    
+    return [];
+  }
+
   async function main() {
     try {
-      // 测试SDK是否可用
       log('SDK已加载');
-
-      // 方式1：尝试 getActiveTable
-      let table, recordId, sel;
       
+      let table, recordId;
+      
+      // 先尝试getSelection
+      let sel;
       try {
         sel = await bitable.base.getSelection();
-        log('getSelection结果: ' + JSON.stringify(sel));
+        log('getSelection: ' + JSON.stringify(sel));
       } catch(e) {
-        log('getSelection出错: ' + e.message);
+        log('getSelection错误: ' + e.message);
       }
 
-      if (sel && sel.tableId && sel.recordId) {
-        table = await bitable.base.getTableById(sel.tableId);
-        recordId = sel.recordId;
-      } else {
-        // 方式2：如果没选中，直接读"出库单"表的第一条记录
-        log('尝试直接读出库单表');
-        // 获取所有表
-        // 目前SDK没有getTableList，想办法
-        // 直接通过tableName获取
+      // 直接通过表名找表
+      try {
         table = await bitable.base.getTableByName('出库单');
-        if (!table) {
-          // 尝试通过ID
+        log('通过表名获取表: ' + (table ? '成功' : 'null'));
+      } catch(e) {
+        log('getTableByName失败: ' + e.message);
+      }
+      
+      if (!table) {
+        try {
           table = await bitable.base.getTableById('tblUbiw8UKMY0cHI');
+          log('通过ID获取表: 成功');
+        } catch(e) {
+          log('getTableById失败: ' + e.message);
         }
-        
-        if (sel && sel.tableId) {
-          table = await bitable.base.getTableById(sel.tableId);
+      }
+
+      if (!table) {
+        app.innerHTML = '<div class="tips"><h3>📋 出错了</h3><div class="error">找不到"出库单"表</div><div class="debug">' + logs.join('\n') + '</div></div>';
+        return;
+      }
+
+      const meta = await table.getMeta();
+      log('当前表: ' + meta.name);
+
+      // 优先用选中的记录ID
+      if (sel && sel.recordId) {
+        recordId = sel.recordId;
+        log('使用选中记录: ' + recordId);
+      } else {
+        // 否则取第一条
+        log('无选中记录，取第一条');
+        const ids = await getRecordIdList(table);
+        log('记录列表: ' + JSON.stringify(ids));
+        if (ids && ids.length > 0) {
+          recordId = ids[0];
         }
-        
-        // 尝试获取所有记录ID
-        if (table) {
-          const meta = await table.getMeta();
-          log('当前表: ' + meta.name);
-          
-          // 通过getRecordIdList方法
-          // @ts-ignore
-          if (table.getRecordIdList) {
-            const ids = await table.getRecordIdList();
-            log('记录列表: ' + JSON.stringify(ids));
-            if (ids && ids.length > 0) {
-              recordId = ids[0];
-            }
-          }
-        }
+      }
+
+      if (sel && sel.tableId) {
+        const curTable = await bitable.base.getTableById(sel.tableId);
+        const curMeta = await curTable.getMeta();
+        log('选中表: ' + curMeta.name);
       }
 
       if (!table || !recordId) {
